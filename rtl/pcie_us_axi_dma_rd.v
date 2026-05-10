@@ -423,6 +423,9 @@ reg [3:0] status_fifo_rd_error_reg = 4'd0, status_fifo_rd_error_next;
 reg status_fifo_rd_valid_reg = 1'b0, status_fifo_rd_valid_next;
 
 reg [RQ_SEQ_NUM_WIDTH-1:0] active_tx_count_reg = {RQ_SEQ_NUM_WIDTH{1'b0}};
+reg [RQ_SEQ_NUM_WIDTH:0] active_tx_count_next;
+reg [1:0] active_tx_seq_return_count;
+reg [1:0] active_tx_seq_decrement;
 reg active_tx_count_av_reg = 1'b1;
 reg inc_active_tx;
 
@@ -453,6 +456,19 @@ reg status_error_uncor_reg = 1'b0, status_error_uncor_next;
 reg [AXIS_PCIE_DATA_WIDTH-1:0] save_axis_tdata_reg = {AXIS_PCIE_DATA_WIDTH{1'b0}};
 
 wire [AXI_DATA_WIDTH-1:0] shift_axis_tdata = {s_axis_rc_tdata, save_axis_tdata_reg} >> ((AXI_STRB_WIDTH-offset_reg)*AXI_WORD_SIZE);
+
+function [5:0] pcie_tag_seq_num;
+    input [PCIE_TAG_WIDTH-1:0] tag;
+    integer bit_idx;
+    begin
+        pcie_tag_seq_num = 6'd0;
+        for (bit_idx = 0; bit_idx < PCIE_TAG_WIDTH && bit_idx < 6; bit_idx = bit_idx + 1) begin
+            pcie_tag_seq_num[bit_idx] = tag[bit_idx];
+        end
+    end
+endfunction
+
+wire [5:0] req_rq_seq_num = pcie_tag_seq_num(req_pcie_tag_reg);
 
 // internal datapath
 reg  [AXIS_PCIE_DATA_WIDTH-1:0]    m_axis_rq_tdata_int;
@@ -601,6 +617,22 @@ initial begin
 end
 
 always @* begin
+    active_tx_seq_return_count = {1'b0, s_axis_rq_seq_num_valid_0} +
+                                 {1'b0, s_axis_rq_seq_num_valid_1};
+    if (active_tx_count_reg == 0) begin
+        active_tx_seq_decrement = 2'd0;
+    end else if (active_tx_count_reg == 1 && active_tx_seq_return_count == 2) begin
+        active_tx_seq_decrement = 2'd1;
+    end else begin
+        active_tx_seq_decrement = active_tx_seq_return_count;
+    end
+
+    active_tx_count_next = {1'b0, active_tx_count_reg} -
+                           active_tx_seq_decrement +
+                           inc_active_tx;
+end
+
+always @* begin
     req_state_next = REQ_STATE_IDLE;
 
     s_axis_read_desc_ready_next = 1'b0;
@@ -708,7 +740,7 @@ always @* begin
         tlp_tuser[42:39] = 4'b0000; // tph_type
         tlp_tuser[44:43] = 2'b00; // tph_indirect_tag_en
         tlp_tuser[60:45] = 16'd0; // tph_st_tag
-        tlp_tuser[66:61] = 6'd0; // seq_num0
+        tlp_tuser[66:61] = req_rq_seq_num; // seq_num0
         tlp_tuser[72:67] = 6'd0; // seq_num1
         tlp_tuser[136:73] = 64'd0; // parity
     end else begin
@@ -720,10 +752,10 @@ always @* begin
         tlp_tuser[14:13] = 2'b00; // tph_type
         tlp_tuser[15] = 1'b0; // tph_indirect_tag_en
         tlp_tuser[23:16] = 8'd0; // tph_st_tag
-        tlp_tuser[27:24] = 4'd0; // seq_num
+        tlp_tuser[27:24] = req_rq_seq_num[3:0]; // seq_num
         tlp_tuser[59:28] = 32'd0; // parity
         if (AXIS_PCIE_RQ_USER_WIDTH == 62) begin
-            tlp_tuser[61:60] = 2'd0; // seq_num
+            tlp_tuser[61:60] = req_rq_seq_num[5:4]; // seq_num
         end
     end
 
@@ -1612,20 +1644,12 @@ always @(posedge clk) begin
 
     status_fifo_full_reg <= $unsigned(status_fifo_wr_ptr_reg - status_fifo_rd_ptr_reg) >= 2**STATUS_FIFO_ADDR_WIDTH-4;
 
-    if (inc_active_tx && !s_axis_rq_seq_num_valid_0 && !s_axis_rq_seq_num_valid_1) begin
-        // inc by 1
-        active_tx_count_reg <= active_tx_count_reg + 1;
-        active_tx_count_av_reg <= active_tx_count_reg < (TX_LIMIT-1);
-    end else if ((inc_active_tx && s_axis_rq_seq_num_valid_0 && s_axis_rq_seq_num_valid_1) || (!inc_active_tx && (s_axis_rq_seq_num_valid_0 ^ s_axis_rq_seq_num_valid_1))) begin
-        // dec by 1
-        active_tx_count_reg <= active_tx_count_reg - 1;
-        active_tx_count_av_reg <= 1'b1;
-    end else if (!inc_active_tx && s_axis_rq_seq_num_valid_0 && s_axis_rq_seq_num_valid_1) begin
-        // dec by 2
-        active_tx_count_reg <= active_tx_count_reg - 2;
-        active_tx_count_av_reg <= 1'b1;
+    if (RQ_SEQ_NUM_ENABLE) begin
+        active_tx_count_reg <= active_tx_count_next[RQ_SEQ_NUM_WIDTH-1:0];
+        active_tx_count_av_reg <= active_tx_count_next < TX_LIMIT;
     end else begin
-        active_tx_count_av_reg <= active_tx_count_reg < TX_LIMIT;
+        active_tx_count_reg <= {RQ_SEQ_NUM_WIDTH{1'b0}};
+        active_tx_count_av_reg <= 1'b1;
     end
 
     active_tag_count_reg <= active_tag_count_reg + inc_active_tag - dec_active_tag;
