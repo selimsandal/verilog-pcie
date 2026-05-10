@@ -1114,7 +1114,7 @@ always @(posedge clk) begin
     last_cycle_reg <= last_cycle_next;
     rresp_reg <= rresp_next;
 
-    status_busy_reg <= active_op_count_reg != 0 || active_tx_count_reg != 0;
+    status_busy_reg <= active_op_count_reg != 0 || (RQ_SEQ_NUM_ENABLE && active_tx_count_reg != 0);
 
     tlp_cmd_tag_reg <= tlp_cmd_tag_next;
     tlp_cmd_last_reg <= tlp_cmd_last_next;
@@ -1136,20 +1136,25 @@ always @(posedge clk) begin
 
     have_credit_reg <= (pcie_tx_fc_ph_av > 4) && (pcie_tx_fc_pd_av > (max_payload_size_dw_reg >> 1));
 
-    if (active_tx_count_reg < TX_LIMIT && inc_active_tx && !axis_rq_seq_num_valid_0_int && !axis_rq_seq_num_valid_1_int) begin
-        // inc by 1
-        active_tx_count_reg <= active_tx_count_reg + 1;
-        active_tx_count_av_reg <= active_tx_count_reg < (TX_LIMIT-1);
-    end else if (active_tx_count_reg > 0 && ((inc_active_tx && axis_rq_seq_num_valid_0_int && axis_rq_seq_num_valid_1_int) || (!inc_active_tx && (axis_rq_seq_num_valid_0_int ^ axis_rq_seq_num_valid_1_int)))) begin
-        // dec by 1
-        active_tx_count_reg <= active_tx_count_reg - 1;
-        active_tx_count_av_reg <= 1'b1;
-    end else if (active_tx_count_reg > 1 && !inc_active_tx && axis_rq_seq_num_valid_0_int && axis_rq_seq_num_valid_1_int) begin
-        // dec by 2
-        active_tx_count_reg <= active_tx_count_reg - 2;
-        active_tx_count_av_reg <= 1'b1;
+    if (RQ_SEQ_NUM_ENABLE) begin
+        if (active_tx_count_reg < TX_LIMIT && inc_active_tx && !axis_rq_seq_num_valid_0_int && !axis_rq_seq_num_valid_1_int) begin
+            // inc by 1
+            active_tx_count_reg <= active_tx_count_reg + 1;
+            active_tx_count_av_reg <= active_tx_count_reg < (TX_LIMIT-1);
+        end else if (active_tx_count_reg > 0 && ((inc_active_tx && axis_rq_seq_num_valid_0_int && axis_rq_seq_num_valid_1_int) || (!inc_active_tx && (axis_rq_seq_num_valid_0_int ^ axis_rq_seq_num_valid_1_int)))) begin
+            // dec by 1
+            active_tx_count_reg <= active_tx_count_reg - 1;
+            active_tx_count_av_reg <= 1'b1;
+        end else if (active_tx_count_reg > 1 && !inc_active_tx && axis_rq_seq_num_valid_0_int && axis_rq_seq_num_valid_1_int) begin
+            // dec by 2
+            active_tx_count_reg <= active_tx_count_reg - 2;
+            active_tx_count_av_reg <= 1'b1;
+        end else begin
+            active_tx_count_av_reg <= active_tx_count_reg < TX_LIMIT;
+        end
     end else begin
-        active_tx_count_av_reg <= active_tx_count_reg < TX_LIMIT;
+        active_tx_count_reg <= {RQ_SEQ_NUM_WIDTH{1'b0}};
+        active_tx_count_av_reg <= 1'b1;
     end
 
     active_op_count_reg <= active_op_count_reg + inc_active_op - dec_active_op;
