@@ -177,6 +177,12 @@ parameter CYCLE_COUNT_WIDTH = 13-AXI_BURST_SIZE;
 
 parameter SEQ_NUM_MASK = {RQ_SEQ_NUM_WIDTH-1{1'b1}};
 parameter SEQ_NUM_FLAG = {1'b1, {RQ_SEQ_NUM_WIDTH-1{1'b0}}};
+parameter AXIS_PCIE_RQ_USER_WIDTH_SAFE =
+    AXIS_PCIE_RQ_USER_WIDTH > 137 ? AXIS_PCIE_RQ_USER_WIDTH : 137;
+parameter RQ_SEQ_NUM_FLAG_BIT =
+    AXIS_PCIE_DATA_WIDTH == 512 ? 61+RQ_SEQ_NUM_WIDTH-1 :
+    (RQ_SEQ_NUM_WIDTH > 4 ? 60+RQ_SEQ_NUM_WIDTH-4-1 :
+                            24+RQ_SEQ_NUM_WIDTH-1);
 
 parameter OP_TAG_WIDTH = $clog2(OP_TABLE_SIZE);
 
@@ -330,11 +336,12 @@ reg [TAG_WIDTH-1:0] tlp_cmd_tag_reg = {TAG_WIDTH{1'b0}}, tlp_cmd_tag_next;
 reg tlp_cmd_last_reg = 1'b0, tlp_cmd_last_next;
 
 reg [127:0] tlp_header_data;
-reg [AXIS_PCIE_RQ_USER_WIDTH-1:0] tlp_tuser;
+reg [AXIS_PCIE_RQ_USER_WIDTH_SAFE-1:0] tlp_tuser;
 
 reg [10:0] max_payload_size_dw_reg = 11'd0;
 
 reg have_credit_reg = 1'b0;
+integer data_bit_index;
 
 reg [RQ_SEQ_NUM_WIDTH-1:0] active_tx_count_reg = {RQ_SEQ_NUM_WIDTH{1'b0}};
 reg active_tx_count_av_reg = 1'b1;
@@ -712,6 +719,7 @@ always @* begin
     dec_active_op = 1'b0;
 
     // TLP header and sideband data
+    tlp_tuser = {AXIS_PCIE_RQ_USER_WIDTH_SAFE{1'b0}};
     tlp_header_data[1:0] = 2'b0; // address type
     tlp_header_data[63:2] = tlp_addr_reg[PCIE_ADDR_WIDTH-1:2]; // address
     tlp_header_data[74:64] = dword_count_reg; // DWORD count
@@ -776,7 +784,7 @@ always @* begin
     end
     m_axis_rq_tvalid_int = 1'b0;
     m_axis_rq_tlast_int = 1'b0;
-    m_axis_rq_tuser_int = tlp_tuser;
+    m_axis_rq_tuser_int = tlp_tuser[AXIS_PCIE_RQ_USER_WIDTH-1:0];
 
     // AXI read response processing and TLP generation
     case (tlp_state_reg)
@@ -790,15 +798,7 @@ always @* begin
             m_axis_rq_tvalid_int = s_axis_rq_tready && s_axis_rq_tvalid;
             m_axis_rq_tlast_int = s_axis_rq_tlast;
             m_axis_rq_tuser_int = s_axis_rq_tuser;
-            if (AXIS_PCIE_DATA_WIDTH == 512) begin
-                m_axis_rq_tuser_int[61+RQ_SEQ_NUM_WIDTH-1] = 1'b1;
-            end else begin
-                if (RQ_SEQ_NUM_WIDTH > 4) begin
-                    m_axis_rq_tuser_int[60+RQ_SEQ_NUM_WIDTH-4-1] = 1'b1;
-                end else begin
-                    m_axis_rq_tuser_int[24+RQ_SEQ_NUM_WIDTH-1] = 1'b1;
-                end
-            end
+            m_axis_rq_tuser_int[RQ_SEQ_NUM_FLAG_BIT] = 1'b1;
 
             m_axi_rready_next = 1'b0;
 
@@ -840,7 +840,9 @@ always @* begin
             if (AXIS_PCIE_DATA_WIDTH >= 256) begin
                 m_axi_rready_next = m_axis_rq_tready_int_early && input_active_reg;
 
-                m_axis_rq_tdata_int[AXIS_PCIE_DATA_WIDTH-1:128] = shift_axi_rdata[AXIS_PCIE_DATA_WIDTH-1:128];
+                for (data_bit_index = 128; data_bit_index < AXIS_PCIE_DATA_WIDTH; data_bit_index = data_bit_index + 1) begin
+                    m_axis_rq_tdata_int[data_bit_index] = shift_axi_rdata[data_bit_index];
+                end
                 if (dword_count_reg >= AXIS_PCIE_KEEP_WIDTH-4) begin
                     m_axis_rq_tkeep_int = {AXIS_PCIE_KEEP_WIDTH{1'b1}};
                 end else begin
@@ -1051,15 +1053,7 @@ always @* begin
             m_axis_rq_tvalid_int = s_axis_rq_tready && s_axis_rq_tvalid;
             m_axis_rq_tlast_int = s_axis_rq_tlast;
             m_axis_rq_tuser_int = s_axis_rq_tuser;
-            if (AXIS_PCIE_DATA_WIDTH == 512) begin
-                m_axis_rq_tuser_int[61+RQ_SEQ_NUM_WIDTH-1] = 1'b1;
-            end else begin
-                if (RQ_SEQ_NUM_WIDTH > 4) begin
-                    m_axis_rq_tuser_int[60+RQ_SEQ_NUM_WIDTH-4-1] = 1'b1;
-                end else begin
-                    m_axis_rq_tuser_int[24+RQ_SEQ_NUM_WIDTH-1] = 1'b1;
-                end
-            end
+            m_axis_rq_tuser_int[RQ_SEQ_NUM_FLAG_BIT] = 1'b1;
 
             if (s_axis_rq_tready && s_axis_rq_tvalid && s_axis_rq_tlast) begin
                 tlp_state_next = TLP_STATE_IDLE;

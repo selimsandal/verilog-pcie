@@ -188,6 +188,8 @@ parameter OP_TABLE_WRITE_COUNT_WIDTH = LEN_WIDTH;
 parameter STATUS_FIFO_ADDR_WIDTH = 5;
 
 parameter INIT_COUNT_WIDTH = PCIE_TAG_WIDTH > OP_TAG_WIDTH ? PCIE_TAG_WIDTH : OP_TAG_WIDTH;
+parameter AXIS_PCIE_RQ_USER_WIDTH_SAFE =
+    AXIS_PCIE_RQ_USER_WIDTH > 137 ? AXIS_PCIE_RQ_USER_WIDTH : 137;
 
 // bus width assertions
 initial begin
@@ -390,7 +392,7 @@ reg [OFFSET_WIDTH-1:0] first_cycle_offset_reg = {OFFSET_WIDTH{1'b0}}, first_cycl
 reg [OFFSET_WIDTH-1:0] last_cycle_offset_reg = {OFFSET_WIDTH{1'b0}}, last_cycle_offset_next;
 
 reg [127:0] tlp_header_data;
-reg [AXIS_PCIE_RQ_USER_WIDTH-1:0] tlp_tuser;
+reg [AXIS_PCIE_RQ_USER_WIDTH_SAFE-1:0] tlp_tuser;
 
 reg [10:0] max_read_request_size_dw_reg = 11'd0;
 
@@ -469,6 +471,19 @@ function [5:0] pcie_tag_seq_num;
 endfunction
 
 wire [5:0] req_rq_seq_num = pcie_tag_seq_num(req_pcie_tag_reg);
+
+function [7:0] rc_tlp_tag;
+    input [AXIS_PCIE_DATA_WIDTH-1:0] data;
+    integer bit_idx;
+    begin
+        rc_tlp_tag = 8'd0;
+        for (bit_idx = 0; bit_idx < 8; bit_idx = bit_idx + 1) begin
+            if (64 + bit_idx < AXIS_PCIE_DATA_WIDTH) begin
+                rc_tlp_tag[bit_idx] = data[64 + bit_idx];
+            end
+        end
+    end
+endfunction
 
 // internal datapath
 reg  [AXIS_PCIE_DATA_WIDTH-1:0]    m_axis_rq_tdata_int;
@@ -705,6 +720,7 @@ always @* begin
     req_last_be = 4'b1111 >> (3 - ((req_pcie_addr_reg[1:0] + req_tlp_count[1:0] - 1) & 3));
 
     // TLP header and sideband data
+    tlp_tuser = {AXIS_PCIE_RQ_USER_WIDTH_SAFE{1'b0}};
     tlp_header_data[1:0] = 2'b0; // address type
     tlp_header_data[63:2] = req_pcie_addr_reg[PCIE_ADDR_WIDTH-1:2]; // address
     tlp_header_data[74:64] = req_dword_count; // DWORD count
@@ -772,7 +788,7 @@ always @* begin
         m_axis_rq_tlast_int = 1'b0;
     end
     m_axis_rq_tvalid_int = 1'b0;
-    m_axis_rq_tuser_int = tlp_tuser;
+    m_axis_rq_tuser_int = tlp_tuser[AXIS_PCIE_RQ_USER_WIDTH-1:0];
 
     // TLP segmentation and request generation
     case (req_state_reg)
@@ -977,7 +993,7 @@ always @* begin
                     cpl_status_next = s_axis_rc_tdata[45:43]; // completion status
                     //s_axis_rc_tdata[46]; // poisoned completion
                     //s_axis_rc_tdata[63:48]; // requester ID
-                    pcie_tag_next = s_axis_rc_tdata[71:64]; // tag
+                    pcie_tag_next = rc_tlp_tag(s_axis_rc_tdata); // tag
                     //s_axis_rc_tdata[87:72]; // completer ID
                     //s_axis_rc_tdata[91:89]; // tc
                     //s_axis_rc_tdata[94:92]; // attr
