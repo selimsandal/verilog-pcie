@@ -1217,6 +1217,7 @@ always @(posedge clk) begin
         op_table_tx_finish_ptr_reg <= 0;
         op_table_finish_ptr_reg <= 0;
         op_table_active <= 0;
+        op_table_tx_done <= 0;
     end
 end
 
